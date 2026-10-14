@@ -1,0 +1,51 @@
+--- a/CHANGE.INC
++++ b/CHANGE.INC
+@@ -66,10 +66,15 @@
+ @@noscan:
+ 		cmp	ComFlags+4,1
+ 		jne	@@NoAlt
+-		cmp	byte ptr es:AlterCode[di],0
+-		je	@@NoAlt
+ 		mov	ax,word ptr AltCode
+-		mov	es:AlterCode[di],ax
++		or	al,al			; FIX4: /ALT=OFF ¨Æ¶≠Æ ¢·•£§†
++		je	@@SetAlt
++		cmp	word ptr es:KeybMatrixLen[di],106	; FIX4: 106 - ‚Æ´Ï™Æ ‡„·.
++		ja	@@SetAlt		; ¨†‚‡®Ê†, Alt ¨†‚‡®ÊÎ ¢ ‡•ß®§•≠‚• ≠•‚
++		lea	si,@@Mes_NoAlt
++		call	OutString
++		jmp	short @@NoAlt
++@@SetAlt:	mov	es:AlterCode[di],ax
+ 		lea	si,@@Mes_Alt
+ 		call	outString
+ @@noAlt:
+@@ -265,6 +270,7 @@
+ @@Mes_Border	db	'/Color',cr,lf,0
+ @@mes_Scan	db	'/Scan',cr,lf,0
+ @@mes_Alt	db	'/Alt',cr,lf,0
++@@mes_NoAlt	db	7,'/Alt ignored: loaded without /ALT, reload KEYRUS',cr,lf,0
+ @@mes_Lat	db	'/Lat',cr,lf,0
+ @@mes_Switch	db	'/Switch (key code)',cr,lf,0
+ @@mes_Base	db	'/Base_Keys disabled',cr,lf,0
+--- a/KEYRUS.ASM
++++ b/KEYRUS.ASM
+@@ -279,15 +279,15 @@
+ lf              equ     10
+ eom             equ     '$'
+ 
+-Mes_BadDOS      db      'DOS 3.0 or highter required',cr,lf,eom
+-
+-Title_Keyrus	db	'KEYRUS v8.0_beta16 FIX3 (c) 1989-1994 by Dmitry Gurtjak (17-Jan-94)',cr,lf,eom
++Mes_BadDOS      db      'DOS 3.0 or higher required',cr,lf,eom
++
++Title_Keyrus	db	'KEYRUS v8.0_beta16 FIX4 (c) 1989-1994 by Dmitry Gurtjak (17-Jan-94)',cr,lf,eom
+ len_title	equ	offset $-offset Title_Keyrus
+ 
+ Mes_Saved       db      'Configuration Saved',cr,lf,eom
+ Mes_ErrCreate   db      'Disk Error or disk write protected',cr,lf,eom
+ Mes_ImpRelease  db	7,'/RELEASE: Other version in memory or KeyRus not resident,',cr,lf
+-		db	  '          my be /INTERFACE missed in resident program',cr,lf,eom
++		db	  '          may be /INTERFACE missed in resident program',cr,lf,eom
+ 
+ ;€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ é·≠Æ¢≠†Ô Ø‡Æ£‡†¨¨† €€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€
+ 

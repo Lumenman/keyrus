@@ -1,0 +1,732 @@
+--- a/BUILD.INC
++++ b/BUILD.INC
+@@ -13,13 +13,14 @@
+ 		ret
+ BuildInMemory	endp
+ ;-------------------------------------------------------------------------------
+-BuildProgram : Построить программу в памяти
++;BuildProgram : Построить программу в памяти
+ ;-------------------------------------------------------------------------------
+ BuildProgram	proc	near
+ 						; Заполнение основных переменных
+ 		cld
+ 		mov	es:Status,00000101b	; lat & enable loading
+ 		mov	es:BiosSeg,40h
++		mov	es:Int10h,0
+ 		mov	es:Int08h,0
+ 		mov	es:Int16h,0
+ 		mov	es:VideoBlockData,0
+@@ -486,7 +487,15 @@
+ 		mov	al,ComprFlag
+ 		mov	es:Compress[di],al	; Записали флаг сжатия
+ 
+-		call	AddFontTables		; Подключить заголовки фонтов
++		call	AddFontTables
++		cmp	word ptr es:NumFonts[di],0
++		jne	@@HaveFonts
++		lea	si,Mes_NoFonts
++		call	OutString
++		mov	al,1
++		call	Exit
++@@HaveFonts:
++;	; Подключить заголовки фонтов
+ 
+ ;	Обработчик Int 10h использует следующие подпрограммы
+ ;		[_TouchInt10h]	  : Для блока гашения экрана
+@@ -541,6 +550,7 @@
+ 		lea	si,VideoHandler
+ 		call	MoveBlock		; Подключить обработчик Int 10h
+ 		mov	New_10h,si
++		mov	es:Int10h,si
+ 
+ 		call	AddFonts		; Добавить фонты
+ 		ret
+@@ -656,7 +666,11 @@
+ ;-------------------------------------------------------------------------------
+ AddFonts	proc	near
+ 
+-		mov	cx,es:NumFonts[di]		; Число фонтов
++		mov	cx,es:NumFonts[di]
++		or	cx,cx
++		jnz	@@HaveFonts
++		ret
++@@HaveFonts:				; Число фонтов
+ 		xor	bx,bx				; Смещение в таблице
+ @@lp:
+ 		push	cx
+@@ -832,3 +846,5 @@
+ 		ret
+ BuildInt16hBlock	endp
+ ;-------------------------------------------------------------------------------
++
++Mes_NoFonts db 'No fonts selected; use /ROM or enable a font',13,10,0
+--- a/CHANGE.INC
++++ b/CHANGE.INC
+@@ -53,6 +53,12 @@
+ @@Noborder:
+ 		cmp	ComFlags+3,1
+ 		jne	@@NoScan
++		mov	ax,es:Scan_cod[di]
++		cmp	ax,es:ResetCode[di]
++		jne	@@SeparateLat
++		mov	ax,word ptr ScanCode
++		mov	es:ResetCode[di],ax
++@@SeparateLat:
+ 		mov	ax,word ptr ScanCode
+ 		mov	es:Scan_cod[di],ax
+ 		lea	si,@@Mes_Scan
+@@ -71,7 +77,9 @@
+ 		jne	@@NoLat
+ 		mov	ax,word ptr LatCode
+ 		or	al,al
+-		je	@@noLat
++		jne	@@SetLat
++		mov	ax,es:Scan_cod[di]
++@@SetLat:
+ 		mov	es:Resetcode[di],ax
+ 		lea	si,@@Mes_Lat
+ 		call	OutString
+@@ -270,7 +278,7 @@
+ ; es:di - KeyboardBlockData
+ ;-------------------------------------------------------------------------------
+ DelayInstall9	proc	near
+-		push	di ds
++		push	di es ds
+ 		or	di,di
+ 		je	@@rt
+ 
+@@ -299,7 +307,7 @@
+ @@rt:		pop	ds 
+ 		lea	si,@@mes_delay
+ 		call	OutString
+-		pop	di
++		pop	es di
+ 		ret
+ 
+ @@mes_delay	db	'Keyboard driver installed',cr,lf,0
+--- a/COMSTR.INC
++++ b/COMSTR.INC
+@@ -60,6 +60,8 @@
+ 		call	ReadCommandFile		; Обнаружен '@' - читать файл
+ 		jmp	@@1
+ @@2:
++		cmp	di,2048
++		jae	CommandTooLong
+ 		stosb
+ 		inc	ComLineLength
+ 		loop	@@lp
+@@ -73,11 +75,13 @@
+ ;-------------------------------------------------------------------------------
+ ReadCommandFile		proc near
+ 
+-		jcxz	@@err
++		or	cx,cx
++		jz	@@err
+ @@lp:		lodsb			; отбрасываем пробелы спереди
+ 		cmp	al,' '
+ 		loope	@@lp
+-		jcxz	@@err
++		or	cx,cx
++		jz	@@err
+ 
+ 		inc	cx
+ 		dec	si
+@@ -106,18 +110,36 @@
+ 
+ 		push	ds dx cx
+ 		mov	bx,ax
++		call	FileSize
++		jc	@@SizeError
++		or	dx,dx
++		jne	@@SizeError
++		cmp	ax,2048
++		ja	@@SizeError
+ 		mov	ds,cs:FileSeg
+ 		xor	dx,dx
+ 		mov	cx,2048		; 2048 байт максимум
+ 		mov	ah,3fh
+ 		int	21h
++		jmp	@@ReadDone
++@@SizeError:
++		mov	ax,5
++		stc
++@@ReadDone:
+ 		pushf
+ 		push	ax
+ 		mov	ah,3eh		; close file
+ 		int	21h
+-		pop	ax
+-		popf
+-		pop	cx dx ds
++        jnc @@Closed
++        pop ax
++        popf
++        stc
++        jmp @@CloseDone
++@@Closed:
++        pop ax
++        popf
++@@CloseDone:
++        pop cx dx ds
+ 
+ 		jc	@@errfile
+ 
+@@ -131,6 +153,8 @@
+ 		lodsb
+ 		cmp	al,' '
+ 		jb	@@eol
++		cmp	di,2048
++		jae	CommandTooLong
+ 		stosb
+ 		inc	cs:ComLineLength
+ @@eol:		loop	@@lp2
+@@ -184,7 +208,14 @@
+ 		cmp     al,'a'
+ 		jb      @@NoUp
+ 		sub     al,'a'-'A'              ; Uppercase
+-@@NoUp:         stosb				; Пишем символ
++@@NoUp:
++		push	ax
++		mov	ax,di
++		sub	ax,cs:Buffer2
++		cmp	ax,255
++		pop	ax
++		jae	CommandTooLong
++		stosb				; Пишем символ
+ 		jmp     short @@lp
+ @@EndLine:
+ 		mov     al,0
+@@ -380,3 +411,13 @@
+ 		ret
+ NumPar          endp
+ 
++
++CommandTooLong proc near
++        push cs
++        pop ds
++        lea si,Mes_TooLong
++        call OutString
++        mov al,1
++        call Exit
++CommandTooLong endp
++Mes_TooLong db 'Command line or parameter too long',13,10,0
+--- a/FILES.INC
++++ b/FILES.INC
+@@ -8,19 +8,20 @@
+ ;-------------------------------------------------------------------------------
+ ; FileSize : Возвращает в ax размер файла с описателем в bx в байтах
+ ;-------------------------------------------------------------------------------
+-FileSize        proc    near
+-		mov	ax,4202h
+-		xor	cx,cx
+-		xor	dx,dx
+-		int	21h
+-		push	ax
+-		mov	ax,4200h
+-		xor	cx,cx
+-		xor	dx,dx
+-		int	21h
+-		pop	ax
+-		ret
+-FileSize        endp
++FileSize proc near
++        mov ax,4202h
++        xor cx,cx
++        xor dx,dx
++        int 21h
++        jc @@ret
++        push dx ax
++        mov ax,4200h
++        xor cx,cx
++        xor dx,dx
++        int 21h
++        pop ax dx
++@@ret:  ret
++FileSize endp
+ ;-------------------------------------------------------------------------------
+ ; FileError : Сообщение об ошибке параметра и файла, завершение
+ ;-------------------------------------------------------------------------------
+@@ -45,7 +46,10 @@
+ 		jc      @@Error
+ 
+ 		mov     bx,ax
+-		call	FileSize		; получить размер файла
++		call	FileSize
++		jc	@@Error1
++		or	dx,dx
++		jne	@@Error1		; получить размер файла
+ 		or	al,al
+ 		jne	@@Error1		; размер не кратен 256
+ 						; похож на файл фонта
+@@ -66,9 +70,13 @@
+ 		add	dx,7			; dx - адрес фонта
+ @@Read:
+ 		mov	ah,3fh
+-		int	21h			; читаем файл
++		int	21h
++		jc	@@Error1
++		cmp	ax,cx
++		jne	@@Error1
+ 		mov     ah,3eh
+ 		int	21h	   		; закрываем файл
++		jc	@@Error
+ 		pop     bx
+ 		ret
+ @@Error1:
+@@ -91,6 +99,9 @@
+ 
+ 		mov     bx,ax
+ 		call	FileSize
++		jc	@@ReadError
++		or	dx,dx
++		jne	@@ReadError
+ 		cmp	ax,212
+ 		jz      @@Read
+ 		cmp	ax,318
+@@ -103,11 +114,18 @@
+ 		mov     cx,ax
+ 		mov	ah,3fh
+ 		mov     dx,offset Keyboards
+-		int	21h		; читаем файл
++		int	21h
++		jc	@@ReadError
++		cmp	ax,cx
++		jne	@@ReadError
+ 		mov     ah,3eh
+ 		int	21h		; закрываем файл
++		jc	@@Error
+ 		pop     bx
+ 		ret
++@@ReadError:
++		mov	ah,3eh
++		int	21h
+ @@Error:
+ 		call    FileError
+ 
+@@ -145,9 +163,13 @@
+ 		mov	bx,ax
+ 		pop	dx cx
+ 		mov	ah,40h
+-		int	21h			; Write file
++		int	21h
++		jc	@@Err
++		cmp	ax,cx
++		jne	@@Err
+ 		mov	ah,3eh
+ 		int	21h
++		jc	@@Err
+ 
+ 		pop	cx si
+ 		mov	si,[si+4]
+@@ -163,8 +185,12 @@
+ 		mov	cx,318
+ 		mov	ah,40h
+ 		int	21h
++		jc	@@Err
++		cmp	ax,cx
++		jne	@@Err
+ 		mov	ah,3eh
+-		int	21h  			; Записали файл клавиатуры
++		int	21h
++		jc	@@Err  			; Записали файл клавиатуры
+ 
+ 		lea	si,@@Mes_Create
+ 		call	OutString
+--- a/INT16.INC
++++ b/INT16.INC
+@@ -80,6 +80,7 @@
+ 		or      bl,00000001b            ; set english flag
+ @@Set:
+ 		mov	al,bl
++		mov	Status,al		; FIX3: independent of indicators
+ 	        push    es di
+ 		mov	es,BiosSeg
+ 		mov	di,KeyboardBlockData
+--- a/KEYRUS.ASM
++++ b/KEYRUS.ASM
+@@ -6,7 +6,11 @@
+ 
+ 
+ CurVerHi        equ     8
+-CurVerLo        equ     0
++IFDEF TASM_BUILD
++CurVerLo        equ     4       ; FIX3: TASM resident offsets
++ELSE
++CurVerLo        equ     3       ; FIX3: JWasm resident offsets
++ENDIF
+ 
+ code		segment
+ 		assume  cs:code, ds:code
+@@ -57,7 +61,8 @@
+ 
+ LdChar			equ	word ptr ds:[61h]	; Addr. Load char
+ 
+-FreeAddr		equ	63h			; Первый свободный адрес
++Int10h                  equ     word ptr ds:[63h]
++FreeAddr		equ	65h			; Первый свободный адрес
+ ;-------------------------------------------------------------------------------
+ ;  Формат перемещаемой процедуры:
+ ;-------------------------------------------------------------------------------
+@@ -180,15 +185,15 @@
+ ModeShiftMode	db	0	; режим для ModeShift (0,1,2)
+ ColorBorder     db      1       ; цвет рамки в rus
+ AltColorBorder  db      10      ; цвет рамки в alt
+-ScanCode        db      54,0    ; скан код инициализации rus (54=shift)
+-AltCode         db      56+80h,0; скан код инициализации alt (56+80h=r.alt)
++ScanCode        db      29+80h,0    ; скан код инициализации rus (54=shift)
++AltCode         db      0,0; скан код инициализации alt (56+80h=r.alt)
+ LatCode         db      0,0     ; скан код lat (0 - экв. ScanCode)
+-RangeFlag       db      1       ; код промежутка :  0 - /ROM
++RangeFlag       db      3       ; код промежутка :  0 - /ROM
+ 				;                   1 - Define 2 ranges
+ 				;                   2 - /128
+ 				;                   3 - /ALL
+ ClrScanFlag	db	1	; =1 : Обнулять скэнкоды
+-ComprFlag       db      1       ; =1 : Сжимать фонт (графика не поддерж.)
++ComprFlag       db      0       ; =1 : Сжимать фонт (графика не поддерж.)
+ StChar1         db      80h     ;
+ StChar2         db      0e0h    ; Эти 4 значения определяют
+ NChar1          db      48      ; 2 промежутка символов
+@@ -276,7 +281,7 @@
+ 
+ Mes_BadDOS      db      'DOS 3.0 or highter required',cr,lf,eom
+ 
+-Title_Keyrus	db	'KEYRUS v8.0_beta16 (c) 1989-1994 by Dmitry Gurtjak (17-Jan-94)',cr,lf,eom
++Title_Keyrus	db	'KEYRUS v8.0_beta16 FIX3 (c) 1989-1994 by Dmitry Gurtjak (17-Jan-94)',cr,lf,eom
+ len_title	equ	offset $-offset Title_Keyrus
+ 
+ Mes_Saved       db      'Configuration Saved',cr,lf,eom
+@@ -284,7 +289,7 @@
+ Mes_ImpRelease  db	7,'/RELEASE: Other version in memory or KeyRus not resident,',cr,lf
+ 		db	  '          my be /INTERFACE missed in resident program',cr,lf,eom
+ 
+-█████████████████████████████ Основная программа ███████████████████████████████
++;█████████████████████████████ Основная программа ███████████████████████████████
+ 
+ SetUp:
+ 		push    ds
+@@ -396,7 +401,7 @@
+ 		mov	al,0
+ 		call	Exit
+ 
+-██████████████████████████████ Блок подпрограмм ████████████████████████████████
++;██████████████████████████████ Блок подпрограмм ████████████████████████████████
+ ;-------------------------------------------------------------------------------
+ ; Terminate : Активизация драйвера и оставить резидентным
+ ;		в стеке - резидентный размер, статус MoveDown (=0 - Ok)
+@@ -658,7 +663,7 @@
+ ;-------------------------------------------------------------------------------
+ FontTable	equ	$			; Таблица фонтов
+ 
+-NumberFonts	dw	4			; Число фонтов
++NumberFonts	dw	3			; Число фонтов
+ 
+ Font_8x8	db	8			; 0: Размер фонта
+ 		db	2			; 1: Функция по загрузке
+@@ -674,7 +679,7 @@
+ 		db	22h			; Функция по графической загрузке
+ 		db	2			; Функция адреса фонта
+ 		dw	offset Font_8x16	; таблица для следующего фонта
+-font_14         db      2       		; Флаг загрузки 8x14
++font_14         db      1       		; Флаг загрузки 8x14
+ 
+ 		INCLUDE	Font8x14.INC
+ 
+@@ -682,19 +687,10 @@
+ 		db	4			; Функция по загрузке
+ 		db	24h			; Функция по графической загрузке
+ 		db	6			; Функция адреса фонта
+-		dw	offset Font_8x19	; Таблица для следующего фонта
+-font_16         db      2       		; Флаг загрузки 8x16
++		dw	offset Font_8xXX	; Таблица для следующего фонта
++font_16         db      1       		; Флаг загрузки 8x16
+ 
+ 		INCLUDE	Font8x16.INC
+-
+-Font_8x19	db	19			; Размер фонта
+-		db	0ffh			; Функция по загрузке
+-		db	0ffh			; Функция по графической загрузке
+-		db	0ffh			; Функция адреса фонта
+-		dw	offset Font_8xXX	; Таблица для следующего фонта
+-font_19         db      0       		; Флаг загрузки 8x16
+-
+-		INCLUDE	Font8x19.INC
+ 
+ Font_8xXX	equ	$
+ 
+--- a/PR.INC
++++ b/PR.INC
+@@ -6,44 +6,152 @@
+ ;-------------------------------------------------------------------------------
+ ; SaveMyself : Сохранить KEYRUS с новыми параметрами и выйти
+ ;-------------------------------------------------------------------------------
+-SaveMyself      proc    near
+-
+-		push    bx ds
+-		mov     ds,ds:[2ch]             ; env segment
+-		xor	si,si
+-@@lp1:		lodsb
+-		or	al,al
+-		jne	@@lp1
+-		lodsb
+-		or	al,al
+-		jne	@@lp1
+-		inc	si
+-		inc     si                      ; find myself file name
+-		mov	dx,si
+-		mov	ah,3ch
+-		mov	cx,20h
+-		int     21h                     ; create file
+-		pop	ds
+-		jnc	@@ok
+-
+-		lea     dx,Mes_ErrCreate
+-		jmp	@@mes
+-@@ok:
+-		mov	bx,ax
+-		mov	dx,100h
+-		mov     cx,EndProgram
+-		sub	cx,100h
+-		mov	ah,40h
+-		int     21h                     ; write file
+-		mov	ah,3eh
+-		int	21h
+-		lea     dx,Mes_Saved
+-@@mes:		mov	ah,9
+-		int	21h
+-		pop	bx
+-		mov	al,0
+-		call	Exit
+-SaveMyself      endp
++; FIX3: write/close a sibling temporary file before renaming the original.
++; Existing KR3SAVE.TMP / KR3SAVE.BAK are never overwritten.
++SaveMyself proc near
++        cld
++        push ds
++        pop es
++        push ds
++        mov ds,ds:[2ch]
++        xor si,si
++@@Env:  lodsb
++        or al,al
++        jne @@Env
++        lodsb
++        or al,al
++        jne @@Env
++        add si,2
++        lea di,SavePath
++        mov cx,127
++@@Path: lodsb
++        stosb
++        or al,al
++        je @@PathDone
++        loop @@Path
++        pop ds
++        jmp @@Error
++@@PathDone:
++        pop ds
++        lea si,SavePath
++        lea di,SaveTemp
++        xor bx,bx
++@@Copy: lodsb
++        stosb
++        cmp al,92
++        jne @@NotSlash
++        mov bx,di
++@@NotSlash:
++        or al,al
++        jne @@Copy
++        or bx,bx
++        je @@Error
++        cmp bx,offset SaveTemp+116
++        ja @@Error
++        mov di,bx
++        lea si,SaveTempName
++        mov cx,12
++        rep movsb
++        lea si,SaveTemp
++        lea di,SaveBackup
++        mov cx,128
++        rep movsb
++        mov di,bx
++        sub di,offset SaveTemp
++        add di,offset SaveBackup
++        lea si,SaveBackupName
++        mov cx,12
++        rep movsb
++        ; Refuse to replace a read-only executable.
++        lea dx,SavePath
++        mov ax,4300h
++        int 21h
++        jc @@Error
++        test cx,1
++        jnz @@Error
++        mov SaveAttributes,cx
++        lea dx,SaveBackup
++        mov ax,4300h
++        int 21h
++        jnc @@Error
++        cmp ax,2
++        jne @@Error
++        lea dx,SaveTemp
++        xor cx,cx
++        mov ax,5b00h
++        int 21h
++        jc @@Error
++        mov bx,ax
++        mov dx,100h
++        mov cx,EndProgram
++        sub cx,100h
++        mov ah,40h
++        int 21h
++        jc @@WriteError
++        cmp ax,cx
++        jne @@WriteError
++        mov ah,3eh
++        int 21h
++        jc @@RemoveTemp
++        lea dx,SavePath
++        lea di,SaveBackup
++        mov ah,56h
++        int 21h
++        jc @@RemoveTemp
++        lea dx,SaveTemp
++        lea di,SavePath
++        mov ah,56h
++        int 21h
++        jnc @@Committed
++        ; Roll back. If this also fails, preserve the backup for recovery.
++        lea dx,SaveBackup
++        lea di,SavePath
++        mov ah,56h
++        int 21h
++        jc @@Recovery
++        jmp @@RemoveTemp
++@@Committed:
++        lea dx,SavePath
++        mov cx,SaveAttributes
++        mov ax,4301h
++        int 21h
++        jc @@Recovery
++        lea dx,SaveBackup
++        mov ah,41h
++        int 21h
++        jc @@Recovery
++        lea dx,Mes_Saved
++        mov ah,9
++        int 21h
++        xor al,al
++        call Exit
++@@WriteError:
++        mov ah,3eh
++        int 21h
++@@RemoveTemp:
++        lea dx,SaveTemp
++        mov ah,41h
++        int 21h
++@@Error:
++        lea dx,Mes_SaveError
++        jmp @@Report
++@@Recovery:
++        lea dx,Mes_SaveRecovery
++@@Report:
++        mov ah,9
++        int 21h
++        mov al,1
++        call Exit
++SaveMyself endp
++SaveAttributes dw 0
++SavePath db 128 dup (0)
++SaveTemp db 128 dup (0)
++SaveBackup db 128 dup (0)
++SaveTempName db 'KR3SAVE.TMP',0,0
++SaveBackupName db 'KR3SAVE.BAK',0,0
++Mes_SaveError db '/SAVE failed; check disk, permissions and KR3SAVE.TMP/.BAK',13,10,'$'
++Mes_SaveRecovery db '/SAVE incomplete; original preserved as KR3SAVE.BAK',13,10,'$'
++
+ ;-------------------------------------------------------------------------------
+ ; Release : Выгрузка драйвера из памяти
+ ;-------------------------------------------------------------------------------
+@@ -63,9 +171,31 @@
+ 		push	ds es
+ 		mov	es,dx
+ 
+-		cli
+-
+-		mov	es:KeyrLabel1,0
++        cli
++        ; Validate ALL vectors before changing any of them.
++        mov bx,es:Int08h
++        mov cx,8*4
++        call ReleaseVectorCheck
++        jne @@Busy
++        mov bx,es:Int16h
++        mov cx,16h*4
++        call ReleaseVectorCheck
++        jne @@Busy
++        mov bx,es:Int10h
++        mov cx,10h*4
++        call ReleaseVectorCheck
++        jne @@Busy
++        mov bx,es:KeyboardBlockData
++        or bx,bx
++        je @@Checked
++        test bx,8000h
++        jne @@Checked
++        mov bx,es:Int09h[bx]
++        mov cx,9*4
++        call ReleaseVectorCheck
++        jne @@Busy
++@@Checked:
++        mov es:KeyrLabel1,0
+ 		mov	es:KeyrLabel2,0
+ 
+ 		mov	bx,es:Int08h
+@@ -99,7 +229,7 @@
+ 		je	@@all
+ 		mov	bx,es:OldInt10h[bx]
+ 		or	bx,bx
+-		je	@@10
++		je	@@all
+ 		mov	ax,2510h
+ 		lds	dx,es:[bx+ (offset Ofs10h - offset Old_10h_Entry)]
+ 		int	21h			; Восстановление 10h
+@@ -113,7 +243,15 @@
+ 		xor	al,al
+ 		jmp	@@ex
+ 
+-@@Imposs:	lea	dx,Mes_ImpRelease
++@@Busy:
++        sti
++        pop es ds
++        lea dx,Mes_ReleaseBusy
++        mov ah,9
++        int 21h
++        mov al,1
++        jmp @@ex
++@@Imposs:       lea dx,Mes_ImpRelease
+ 		mov	ah,9
+ 		int	21h
+ 		mov	al,1
+@@ -309,3 +447,21 @@
+ @@ax		dw	0
+ @@ret		dw	0
+ FreeProgram	endp
++
++; ES=resident, BX=our offset (0=not installed), CX=IVT byte offset.
++; ZF=1 if absent or still the top handler. No DOS calls during validation.
++ReleaseVectorCheck proc near
++        or bx,bx
++        je @@ret
++        push ds si ax
++        xor ax,ax
++        mov ds,ax
++        mov si,cx
++        cmp [si],bx
++        jne @@done
++        mov ax,es
++        cmp [si+2],ax
++@@done: pop ax si ds
++@@ret:  ret
++ReleaseVectorCheck endp
++Mes_ReleaseBusy db '/RELEASE refused: another handler is installed after KEYRUS',13,10,'$'

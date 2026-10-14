@@ -1,0 +1,49 @@
+T01.TXT exit=0 base /fast=off
+T02.TXT exit=0 probe
+T03.TXT exit=0 base /release
+T04.TXT exit=1 keyrus /8x8=off /8x14=off /8x16=off /fast=off
+T05.TXT exit=1 keyrus @LONG.CFG
+T06.TXT exit=1 keyrus @OVER.CFG
+T07.TXT exit=1 keyrus /keys=BIG.KBD
+T08.TXT exit=0 keyrus /files
+T09.TXT exit=0 keyrus /fast=off /color=0,0 /beep=off /lamp=off
+T10.TXT exit=0 probe
+T11.TXT exit=0 keyrus /fast=off /scan=54
+T12.TXT exit=0 keyrus /fast=off /scan=29p
+T13.TXT exit=0 probe scan
+T14.TXT exit=0 keyrus /fast=off /lat=42
+T15.TXT exit=0 keyrus /fast=off /lat=off
+T16.TXT exit=0 probe scan
+T17.TXT exit=0 hook
+T18.TXT exit=1 keyrus /release
+T19.TXT exit=0 probe
+T20.TXT exit=0 hook /u
+T21.TXT exit=0 keyrus /release
+T22.TXT exit=0 keyrus /fast=off /delay_init
+T23.TXT exit=0 keyrus /fast=off /scan=29p /keys=GOOD.KBD
+T24.TXT exit=0 probe scan
+T25.TXT exit=0 keyrus /release
+T26.TXT exit=0 keyrus /fast=off /all /keys=GOOD.KBD /font=_08x16.fnt
+T27.TXT exit=0 probe
+T28.TXT exit=0 keyrus /fast=off /font=_08x16.fnt
+T29.TXT exit=0 keyrus /release
+T30.TXT exit=0 saved /scan=54 /save
+T31.TXT exit=0 saved /?
+T32.TXT exit=0 saved /fast=off
+T33.TXT exit=0 probe
+T34.TXT exit=0 saved /release
+T35.TXT exit=0 keyrus /fast=off /rom /8x8=off /8x14=off /8x16=off
+T36.TXT exit=0 probe
+T37.TXT exit=0 keyrus /release
+T38 default FAST=ON install
+T39 API
+T40 release
+T41 timer INT08 installed /BLANK=ON
+T42 API
+T43 release
+T44 install defaults (/ALT=OFF)
+T45 /ALT=56 on resident without Alt matrix: ignored
+T46 release
+T47 install /ALT=56
+T48 /ALT=29 on resident: changed
+T49 release

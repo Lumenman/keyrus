@@ -1,0 +1,16 @@
+# TASM 5.x is not redistributable, JWasm: see README.md
+TASM/
+dev/tools/
+__pycache__/
+# FIX2 by BolenB, not ours: download, see README.md
+keyrus_fix2.zip
+*.zip
+# build outputs
+/*.COM
+dev/build*/
+# DOS test results (sources: RUN.BAT, *.ASM, GOOD.KBD, CASES.TXT)
+dev/dos_test/*
+!dev/dos_test/RUN.BAT
+!dev/dos_test/*.ASM
+!dev/dos_test/GOOD.KBD
+!dev/dos_test/CASES.TXT
